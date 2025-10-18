@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>焦距统计工具 (高效 v2 综合版) - 含规范表</title>
+<script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+<style>
+:root{--bg:#0f1724;--text:#e6eef8;--muted:#9fb0c9}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;background:linear-gradient(180deg,#071028 0%,#071529 100%) fixed;color:var(--text)}
+.app{max-width:980px;margin:5vh auto;padding:18px;background:rgba(255,255,255,0.02);border-radius:12px;box-shadow:0 6px 30px rgba(2,6,23,0.6)}
+h1{margin:0 0 10px;font-size:20px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.btn{background:#0d6efd;border:none;padding:8px 12px;border-radius:8px;color:white;cursor:pointer;text-align: center;}
+.btn.secondary{background:#0b819a}
+.btn.revoke{background:#df4545}
+.lang{margin-left:auto;display:flex;gap:6px;align-items:center}
+.drop{border:2px dashed rgba(255,255,255,0.06);padding:18px;border-radius:10px;text-align:center;color:var(--muted);min-height:110px;display:flex;align-items:center;justify-content:center}
+#filesList{margin-top:12px;max-height:140px;overflow:auto;padding-right:6px}
+.fileRow{display:flex;justify-content:space-between;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:6px}
+.progress{height:8px;background:rgba(255,255,255,0.03);border-radius:4px;overflow:hidden}
+.progress>i{display:block;height:100%;background:linear-gradient(90deg,#3b82f6,#06b6d4);width:0%}
+.note{font-size:13px;color:var(--muted)}
+canvas{width:100%;height:360px;border-radius:8px;background:rgba(255,255,255,0.01)}
+footer{margin-top:14px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
+.credit{font-weight:600}
+input[type=file]{display:none}
+@media(max-width:640px){.controls{flex-direction:column;align-items:stretch}.lang{margin-left:0}}
+#chartCanvas {display: block;max-width: 100%;height: auto;aspect-ratio: 21 / 9;object-fit: contain}
+/* 规范表样式 */
+.spec-panel{margin-top:12px;background:rgba(255,255,255,0.02);padding:12px;border-radius:10px}
+.spec-toggle{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--text);padding:6px 10px;border-radius:8px;cursor:pointer}
+.spec-table{width:100%;border-collapse:collapse;margin-top:10px}
+.spec-table th, .spec-table td{border:1px solid rgba(255,255,255,0.04);padding:8px;text-align:center;font-size:14px}
+.spec-table th{background:rgba(255,255,255,0.02)}
+.small{font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1 id="title">焦距统计工具</h1>
+  <div class="controls">
+    <label class="btn" id="btnImport" style="display: block;">导入照片</label>
+    <label class="btn secondary" id="btnImportMore" style="display: none;">追加照片</label>
+    <button class="btn revoke" id="btnClear" style="display: none;">清除</button>
+    <button class="btn" id="btnExport" style="display: none;">导出图表</button>
+    <div class="lang">
+      <label class="small">EN / 中文</label>
+      <input type="checkbox" id="toggleLang" />
+    </div>
+  </div>
+
+  <div class="drop" id="dropArea">把照片拖到这里，或点击“导入照片”（支持 JPG / PNG）</div>
+  <div id="filesList"></div>
+
+  <div style="margin-top:12px">
+    <div class="progress"><i id="progressBar"></i></div>
+    <div class="note" id="status">未开始</div>
+  </div>
+
+  <!-- 规范表面板 -->
+  <div class="spec-panel" id="specPanel">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="btnToggleSpec" class="spec-toggle">显示/隐藏 焦段归类规范（中/EN）</button>
+      <div class="small" style="margin-left:auto;color:var(--muted)">规范表已嵌入前端</div>
+    </div>
+
+    <div id="specContent" style="margin-top:8px;display:none;">
+      <table class="spec-table" id="specTable">
+        <thead>
+          <tr><th>范围（mm）</th><th>归类后焦段（中文）</th><th>Bucket (mm) - EN</th><th>说明 / Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>&lt;18</td><td>原值四舍五入</td><td>Round to nearest</td><td>保留原始近距离焦段</td></tr>
+          <tr><td>19 - 21</td><td>20mm</td><td>20</td><td>20mm 桶</td></tr>
+          <tr><td>&gt;21 - &lt;23</td><td>22mm</td><td>22</td><td>22mm 桶（22 不含 23）</td></tr>
+          <tr><td>23 - 25.999...</td><td>24mm</td><td>24</td><td>23-25 -> 24</td></tr>
+          <tr><td>26 - 28.999...</td><td>28mm</td><td>28</td><td>26-29 -> 28</td></tr>
+          <tr><td>29 - 37.999...</td><td>35mm</td><td>35</td><td>29-38 -> 35</td></tr>
+          <tr><td>38 - 42.499...</td><td>40mm</td><td>40</td><td>38-42.5 -> 40</td></tr>
+          <tr><td>42.5 - 77.499...</td><td>5mm 步长取整</td><td>Round to nearest 5mm</td><td>例如 50 -> 50, 53 -> 55</td></tr>
+          <tr><td>77.5 - 94.5</td><td>85mm</td><td>85</td><td>固定桶</td></tr>
+          <tr><td>94.5 - 110</td><td>105mm</td><td>105</td><td>固定桶</td></tr>
+          <tr><td>110 - 148.5</td><td>135mm</td><td>135</td><td>固定桶</td></tr>
+          <tr><td>148.5 - 181.5</td><td>165mm</td><td>165</td><td>固定桶</td></tr>
+          <tr><td>181.5 - 200</td><td>200mm</td><td>200</td><td>固定桶</td></tr>
+          <tr><td>&gt;200</td><td>以 50mm 步长取整</td><td>Round to nearest 50mm</td><td>例如 240 -> 250</td></tr>
+        </tbody>
+      </table>
+
+      <div class="small" style="margin-top:8px;color:var(--muted)">注：本表格对应函数 classifyFocal() 的逻辑。若需要把此表动态从函数生成或导出为 CSV，请点击右侧操作。</div>
+    </div>
+  </div>
+
+  <canvas id="chartCanvas"></canvas>
+
+  <footer>
+    <div class="small">软件署名 <span class="credit">schwalbe</span></div>
+    <div class="small">离线运行 • 内存优化 • 支持批量</div>
+  </footer>
+
+  <input id="fileInput" type="file" accept=".jpg,.jpeg,.png" multiple />
+</div>
+
+<script>
+// ---------- 多语言 ----------
+const LOCALES={
+ zh:{title:'焦距统计工具',import:'导入照片',importMore:'追加照片',clear:'清除',export:'导出图表',
+     dropHint:'把照片拖到这里，或点击“导入照片”（支持 JPG / PNG）',
+     statusIdle:'未开始',statusProcessing:'处理中：',statusDone:'处理完成',
+     noExif:'无焦距信息',error:'错误',merged:'合并后桶数：',
+     toggleSpec:'显示/隐藏 焦段归类规范（中/EN）'},
+ en:{title:'Focal Stats',import:'Add Photos',importMore:'Add More',clear:'Clear',export:'Export chart',
+     dropHint:'Drop photos here or click “Add Photos”（JPG/PNG）',
+     statusIdle:'Idle',statusProcessing:'Processing:',statusDone:'Done',
+     noExif:'No Focal Info',error:'Error',merged:'Merged Buckets:',
+     toggleSpec:'Show/Hide Focal Buckets (EN/CN)'}
+};
+let lang='zh';
+
+// ---------- DOM ----------
+const fileInput=document.getElementById('fileInput'),
+ dropArea=document.getElementById('dropArea'),
+ progressBar=document.getElementById('progressBar'),
+ statusEl=document.getElementById('status'),
+ filesList=document.getElementById('filesList'),
+ chartCanvas=document.getElementById('chartCanvas'),
+ ctx=chartCanvas.getContext('2d'),
+ toggleLang=document.getElementById('toggleLang'),
+ titleEl=document.getElementById('title'),
+ btnImport = document.getElementById('btnImport'),
+ btnImportMore = document.getElementById('btnImportMore'),
+ btnClear = document.getElementById('btnClear'),
+ btnExport = document.getElementById('btnExport'),
+ btnToggleSpec = document.getElementById('btnToggleSpec'),
+ specContent = document.getElementById('specContent');
+
+btnImport.onclick=()=>fileInput.click();
+btnImportMore.onclick=()=>fileInput.click();
+btnClear.onclick=clearAll;
+btnExport.onclick=exportImage;
+toggleLang.onchange=()=>{lang=toggleLang.checked?'en':'zh';applyLocale();};
+btnToggleSpec.onclick=()=>{specContent.style.display = specContent.style.display==='none'?'block':'none';};
+['dragenter','dragover'].forEach(ev=>dropArea.addEventListener(ev,e=>{e.preventDefault();dropArea.style.borderColor='rgba(59,130,246,0.9)';}));
+['dragleave','drop'].forEach(ev=>dropArea.addEventListener(ev,e=>{e.preventDefault();dropArea.style.borderColor='rgba(255,255,255,0.06)';}));
+dropArea.addEventListener('drop',e=>{e.preventDefault();handleFiles(e.dataTransfer.files);});
+fileInput.onchange=e=>handleFiles(e.target.files);
+applyLocale();
+
+function buttonsInitiate() {
+    btnImport.style = "display: block;";
+    btnImportMore.style = "display: none;";
+    btnClear.style = "display: none;";
+    btnExport.style = "display: none;";
+}
+function buttonsLoading() {
+    btnImport.style = "display: none;";
+    btnImportMore.style = "display: block; filter: saturate(0); pointer-events: none;";
+    btnClear.style = "display: block; filter: saturate(0); pointer-events: none;";
+    btnExport.style = "display: block; filter: saturate(0); pointer-events: none;";
+}
+function buttonsReady() {
+    btnImport.style = "display: none;";
+    btnImportMore.style = "display: block;";
+    btnClear.style = "display: block;";
+    btnExport.style = "display: block;";
+}
+
+function applyLocale(){const L=LOCALES[lang];titleEl.textContent=L.title;
+  dropArea.textContent=L.dropHint;
+  statusEl.textContent=L.statusIdle;
+  btnImport.textContent = L.import;
+  btnImportMore.textContent = L.importMore;
+  btnClear.textContent = L.clear;
+  btnExport.textContent = L.export;
+  btnToggleSpec.textContent = L.toggleSpec;
+}
+
+let focalLengths=[];
+function handleFiles(files){
+ const list=Array.from(files).filter(f=>/image\/(jpeg|png)/.test(f.type));
+ if(list.length===0)return;
+ buttonsLoading(); //按钮灰掉
+ readAll(list);
+ filesList.innerHTML='';
+ list.forEach(f=>{
+  const row=document.createElement('div');
+  row.className='fileRow';
+  row.innerHTML=`<div>${f.name}</div><div class="small">${Math.round(f.size/1024)} KB</div>`;
+  filesList.appendChild(row);
+ });
+}
+
+function readExifPartial(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    const blob = file.slice(0, 65536); // 仅读前64KB
+    reader.onload = function (e) {
+      try {
+        const tags = EXIF.readFromBinaryFile(e.target.result);
+        let focal = tags.FocalLength;
+        if (focal && focal.numerator && focal.denominator) {
+          focal = focal.numerator / focal.denominator;
+        }
+        resolve(focal || null);
+      } catch {
+        resolve(null);
+      }
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+// ---------- 读取EXIF（保持旧版逻辑） ----------
+async function readAll(files){
+ count_all = 0;
+ statusEl.textContent=`${LOCALES[lang].statusProcessing} 0 / ${files.length}`;
+ for(const file of files){
+  const focal=await readExifPartial(file);
+  if(focal && focal>0) {
+    focalLengths.push(focal);
+    count_all++;
+  }
+  const pct=Math.round(count_all/files.length*100);
+  progressBar.style.width=pct+'%';
+  await new Promise(r=>setTimeout(r));
+  statusEl.textContent=`${LOCALES[lang].statusProcessing} ${Math.round(files.length / 100 * pct)} / ${files.length}`;
+ }
+ statusEl.textContent=LOCALES[lang].statusDone;
+ progressBar.style.width='100%';
+ drawChart(focalLengths);
+  buttonsReady(); //按钮就绪
+}
+
+// ---------- 绘图（含桶合并） ----------
+function drawChart(data){
+  // 固定画布分辨率 5040x2160
+  const fixedW = 5040, fixedH = 2160;
+  chartCanvas.width = fixedW;
+  chartCanvas.height = fixedH;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // 清除缩放
+  ctx.clearRect(0, 0, fixedW, fixedH);
+
+  // 背景与标题
+  ctx.fillStyle='#171e31';
+  ctx.fillRect(0,0,fixedW,fixedH);
+  ctx.fillStyle='#cfe7ff';
+  ctx.font='64px system-ui';
+  ctx.fillText(LOCALES[lang].title,100,120);
+
+  if(data.length===0){
+    ctx.font='72px system-ui';
+    ctx.fillText(lang==='zh'?'暂无数据':'No data',100,300);
+    return;
+  }
+
+  // 分桶与合并逻辑（保持桶数小于等于20）
+  const counts={};
+  data.forEach(f=>{const c=classifyFocal(f);counts[c]=(counts[c]||0)+1;});
+  let entries=Object.entries(counts).map(([k,v])=>({f:+k,v}));
+  entries.sort((a,b)=>a.f-b.f);
+  while(entries.length>20){
+    let minSum=Infinity,minIdx=-1;
+    for(let i=0;i<entries.length-1;i++){//18mm以下不合并
+      if (!(entries[i].f<18 && entries[i+1].f<18 &&
+            Math.round(entries[i].f)==entries[i].f &&
+            Math.round(entries[i+1].f)==entries[i+1].f)) {
+        const sum=entries[i].v+entries[i+1].v;
+        if(sum<minSum){minSum=sum;minIdx=i;}
+      }
+    }
+    const a=entries[minIdx],b=entries[minIdx+1];
+    const mergedF=Math.round((a.f*b.v+b.f*a.v)/(a.v+b.v));
+    entries.splice(minIdx,2,{f:mergedF,v:a.v+b.v});
+  }
+
+  const max=Math.max(...entries.map(e=>e.v));
+  const pad=200,barGap=24;
+  const chartW=fixedW-pad*2,chartH=fixedH-400;
+  const barW=Math.max(60,(chartW-(entries.length-1)*barGap)/entries.length);
+
+  // 坐标轴
+  ctx.strokeStyle='rgba(255,255,255,0.1)';
+  ctx.lineWidth=4;
+  ctx.beginPath();
+  ctx.moveTo(pad,fixedH-240);
+  ctx.lineTo(fixedW-pad,fixedH-240);
+  ctx.stroke();
+
+  // 绘制柱状图
+  entries.forEach((e,i)=>{
+    const x=pad+i*(barW+barGap);
+    const barH=e.v/max*chartH;
+    const y=fixedH-240-barH;
+    const g=ctx.createLinearGradient(x,y,x,fixedH-240);
+    g.addColorStop(0,'rgba(59,130,246,0.9)');
+    g.addColorStop(1,'rgba(6,182,212,0.7)');
+    ctx.fillStyle=g;
+    ctx.fillRect(x,y,barW,barH);
+
+    ctx.fillStyle='#dff3ff';
+    ctx.textAlign='center';
+    ctx.font='48px system-ui';
+    ctx.fillText(classifyFocal(e.f)+'mm',x+barW/2,fixedH-150);
+    ctx.font='54px system-ui';
+    ctx.fillText(e.v,x+barW/2,y-20);
+  });
+}
+
+// ---------- 工具 ----------
+function classifyFocal(f){
+ const mm=Number(f);
+ if(mm>=19&&mm<=21)return 20;
+ if(mm>21&&mm<23)return 22;
+ if(mm>=23&&mm<26)return 24;
+ if(mm>=26&&mm<29)return 28;
+ if(mm>=29&&mm<38)return 35;
+ if(mm>=38&&mm<42.5)return 40;
+ if(mm>=42.5&&mm<77.5)return Math.round(mm/5)*5;
+ if(mm>=77.5&&mm<=94.5)return 85;
+ if(mm>94.5&&mm<=110)return 105;
+ if(mm>110&&mm<=148.5)return 135;
+ if(mm>148.5&&mm<=181.5)return 165;
+ if(mm>181.5&&mm<=200)return 200;
+ if(mm>200)return Math.round(mm/50)*50;
+ return Math.round(mm);
+}
+
+function exportImage(){
+ const url=chartCanvas.toDataURL('image/png');
+ const a=document.createElement('a');
+ a.href=url;a.download='focal_stats.png';a.click();
+}
+function clearAll(){
+ focalLengths=[];filesList.innerHTML='';
+ progressBar.style.width='0%';statusEl.textContent=LOCALES[lang].statusIdle;
+ ctx.clearRect(0,0,chartCanvas.width,chartCanvas.height);
+ buttonsInitiate();
+}
+</script>
+</body>
+</html>
